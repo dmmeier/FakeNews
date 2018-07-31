@@ -502,7 +502,7 @@ def compare_models_tau_deterministic(random_runs, t_array, s, m, mu, prior, X_ar
         model2.append(best_estimate)
         ignorant.append(best_estimate1)
         true.append(best_estimate2)
-        #true_direct.append(best_estimate3)
+        
         relerrors.append(relerror)
         parterrors.append(parterror)
         if verbose == 1:

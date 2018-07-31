@@ -1034,8 +1034,8 @@ debugging = 0 #enable for measuring integration errors (doubling range, halving 
 shift_par = 0 #for shifting the exponential distribution; must set to zero for multinoise
 density = 'exponential' #exponential (shifted), or uniform -- true and assumed distribution
 verbose = 0
-taugen ='predcurve' #'deterministic' or 'random' or 'predcurve'
-location = 'cloud' #'laptop' or 'cloud' or 'single location'
+taugen ='random' #'deterministic' or 'random' or 'predcurve'
+location = 'single location' #'laptop' or 'cloud' or 'single location'
 integration_upper_bound = 1  #for own integration routines with noises = 1 as well as MC bounds for uniform distribution
 MC_integration_outer_steps = 500
 MC_integration_inner_steps = 200
@@ -1063,21 +1063,24 @@ if location == 'cloud' or location == 'single location' or location == '': #if w
     which_X =  0 #tells us which value of X_array is the true one
     tau = np.array([[0.1, 0.2, 0.1, 0.3]]) #here we set waiting times (could be made random)
     Ngrid = 1024#resolution along time axis of prediction curves
-    Nruns = 4
+    Nruns = 1000
     Nprediction_pics = 1
-    Nfake_rand = 10 #when tau random, how many fake news arrival random variables do we model?
+    Nfake_rand = 30 #when tau random, how many fake news arrival random variables do we model?
 
     t_array = gen_t_array(T, N)
 
 if location != 'laptop': #otherwise tau will be set by pickle file  
     MC_measure = integration_upper_bound**tau.shape[1] #for MC integrations, global variable  
-    noises = tau.shape[1] #Number of noises; if N>1 always assume/generate exponential dist. 
+    if taugen == 'deterministic' or taugen == 'predcurve':
+        noises = tau.shape[1] #Number of noises; if N>1 always assume/generate exponential dist. 
+    elif taugen == 'random':
+        noises = Nfake_rand
 
 ########################
     
-BM_path = BM(t_array)
-info_path = info(s, X_array[0, which_X], t_array, BM_path, tau, C, m)
-plot_info(info_path, t_array, C, m, tau)
+#BM_path = BM(t_array)
+#info_path = info(s, X_array[0, which_X], t_array, BM_path, tau, C, m)
+#plot_info(info_path, t_array, C, m, tau)
 
 if location == 'cloud' or location == 'single location':
 

@@ -389,6 +389,7 @@ def cond_exp_own(info, t_array, s, X_array, C, m, prior, mu, index):
             summation = 0
             sum_tau_norm = 0
             int_samples = integration_upper_bound * np.random.rand(MC_integration_inner_steps, noises)
+            #print("This is sample {}".format(int_samples[0, :]))
             values, taup_vals = integrand(int_samples, info, t_array, s, X_array, C, m, prior, mu, index)
             summation = 1/MC_integration_inner_steps * np.sum(values, axis = 0)
             sum_tau_norm = 1/MC_integration_inner_steps * np.sum(taup_vals, axis = 0)
@@ -520,6 +521,7 @@ def Par_compare_models_tau_deterministic(random_runs,  A): #A is a tuple of the 
     return results
 
 def Par_helper(i, pars):
+    print("Doing step {}".format(i))
     (t_array, s, C, m, mu, prior, X_array, T, N, index, which_X, tau) = pars
     BM_path = BM(t_array)
     info_path = info(s, X_array[0, which_X], t_array, BM_path, tau, C, m)
@@ -541,6 +543,7 @@ def Par_compare_models_tau_random(random_runs,  A): #A is a tuple of the form
     return results
 
 def Par_helper_tau_random(i, pars):
+    print("Doing step {}".format(i))
     (t_array, s, C, m, mu, prior, X_array, T, N, index, which_X, Nfake_rand) = pars
     if density == 'exponential':
         #assuming exponential distribution for tau, with parameter mu
@@ -548,7 +551,7 @@ def Par_helper_tau_random(i, pars):
             tau = np.random.exponential(1/mu) + shift_par
         else:
             tau = np.random.exponential(1/mu, (1, Nfake_rand))
-            print("Tau is {}".format(tau))
+            #print("Tau is {}".format(tau))
     elif density == 'uniform':
         #assuming uniform
         tau = np.random.rand()
@@ -1035,9 +1038,9 @@ shift_par = 0 #for shifting the exponential distribution; must set to zero for m
 density = 'exponential' #exponential (shifted), or uniform -- true and assumed distribution
 verbose = 0
 taugen ='random' #'deterministic' or 'random' or 'predcurve'
-location = 'single location' #'laptop' or 'cloud' or 'single location'
+location = 'cloud' #'laptop' or 'cloud' or 'single location'
 integration_upper_bound = 1  #for own integration routines with noises = 1 as well as MC bounds for uniform distribution
-MC_integration_outer_steps = 500
+MC_integration_outer_steps = 1000
 MC_integration_inner_steps = 200
 integr = 'MC' #'Riemann' (only for noises = 1) or MC
 MCgraphs = 0 #showing or not graphs of MC simulations
@@ -1065,7 +1068,7 @@ if location == 'cloud' or location == 'single location' or location == '': #if w
     Ngrid = 1024#resolution along time axis of prediction curves
     Nruns = 1000
     Nprediction_pics = 1
-    Nfake_rand = 30 #when tau random, how many fake news arrival random variables do we model?
+    Nfake_rand = 15 #when tau random, how many fake news arrival random variables do we model?
 
     t_array = gen_t_array(T, N)
 
@@ -1075,7 +1078,6 @@ if location != 'laptop': #otherwise tau will be set by pickle file
         noises = tau.shape[1] #Number of noises; if N>1 always assume/generate exponential dist. 
     elif taugen == 'random':
         noises = Nfake_rand
-
 ########################
     
 #BM_path = BM(t_array)

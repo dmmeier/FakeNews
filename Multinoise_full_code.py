@@ -1,17 +1,13 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 """
-Created on Wed Jul 25 22:49:20 2018
-
-@author: davidmeier
-"""
-
-#!/usr/bin/env python3
-# -*- coding: utf-8 -*-
-"""
 Created on Mon Jul 23 10:06:36 2018
 
 @author: davidmeier
+
+This is an implementation of the fake news model by DC Brody and DM Meier.
+Details below. 
+
 """
 
 
@@ -1026,25 +1022,61 @@ def Par_compare_models_plotting_tau_deterministic(t_array, s, C, m, mu, prior, X
     plt.title('Percentage gain of ignorant in {} cases'.format(np.sum(gains<0)))
     plt.show()
     
-    
-    
-"""
-Global variables, debugging indicator, random seed
-"""
-integration_steps_per_unit = 100000 #Global variable used in integration routines
-#np.random.seed(0) #may enable for testing
-debugging = 0 #enable for measuring integration errors (doubling range, halving step)
-shift_par = 0 #for shifting the exponential distribution; must set to zero for multinoise
-density = 'exponential' #exponential (shifted), or uniform -- true and assumed distribution
-verbose = 0
-taugen ='random' #'deterministic' or 'random' or 'predcurve'
-location = 'cloud' #'laptop' or 'cloud' or 'single location'
-integration_upper_bound = 1  #for own integration routines with noises = 1 as well as MC bounds for uniform distribution
-MC_integration_outer_steps = 1000
-MC_integration_inner_steps = 200
-integr = 'MC' #'Riemann' (only for noises = 1) or MC
-MCgraphs = 0 #showing or not graphs of MC simulations
 
+"""
+Main program begins here. 
+
+There are various options for: Integration (MC or Riemann, latter for single fake
+news), different distributions assumed (for multinoise only
+exponential, but single noise can also be uniform and exponential can
+be shifted), taugen parameter to set whether generate tau randomly
+(‘random’), whether we give it deterministically (‘deterministic’), or
+whether we want to plot whole prediction curves (‘predcurve’). The
+first two options choose a particular ‘time_of_conditioning’ and
+develop statistics relative to that; the latter draws curves for
+prediction as a function of conditioning time. For MC method we can
+choose MC_integration_inner_steps for number of simulations run at once
+using vectorization, and MC_integration_outer_steps for the number of
+loops over that.
+
+"""
+    
+"""
+Global variables, debugging indicator, random seed, etc
+"""
+integration_steps_per_unit = 100000 #Global variable used in (Riemann) integration routines
+#np.random.seed(0) #may enable for testing
+debugging = 0 #enable for measuring (Riemann) integration errors (doubling range, halving step)
+shift_par = 0 #for shifting the exponential distribution; must set to zero for multinoise
+
+density = 'exponential' #'exponential' or 'uniform' -- true and assumed distribution
+#In principle, we could have different true and assumed distributions; we do not model this. 
+#In the multinoise case, only 'exponential' is modelled, without shift -- that is, waiting times are exponential distributed
+#In the single noise case we can have 'uniform' on [0, 1] or a (shifted) exponential
+
+verbose = 0 #some comments are added 
+
+taugen ='random' #'deterministic' or 'random' or 'predcurve'
+#if 'random' we generate the waiting times tau randomly as well as the information process.
+#if 'deterministic' we give the waiting times explicitly below as variable tau while randomly varying information process on each iteration.
+#if 'predcurve' we generate prediction curves (conditioning time is being varied for the same information process).
+
+location = 'cloud' #'laptop' or 'cloud' or 'single location'
+#'single location' if one machine is used for computations and plotting
+#'cloud' if the machine does the computation and then pickles the result
+#'laptop' if the machine does the unpickling and plotting
+
+
+integration_upper_bound = 1  #for own integration routines with noises = 1 as well as MC bounds for uniform distribution from which we draw integration variable samples
+MC_integration_outer_steps = 1000 #number of MC steps we do using a for loop
+MC_integration_inner_steps = 200 #number of (length of tau)-dimensional integration variables we use in MC in vectorized computation (function values computed all at once)
+#Total number of MC simulations is the product MC_integration_outer_steps * MC_integration_inner_steps
+
+integr = 'MC' #'Riemann' (only for noises = 1) or 'MC'
+#If 'Riemann' must set everything consistent with noises = 1 (only one item of fake news); integrations are done using Riemann sums
+#If MC then we can have multiple sources of fake news; integrations are done using MC simulation
+
+MCgraphs = 0 #showing or not graphs of MC simulations; shows how the relevant values converge
 
 """
 Parameters and initializations
@@ -1052,28 +1084,29 @@ Parameters and initializations
 
 start = time.time()
 
-if location == 'cloud' or location == 'single location' or location == '': #if we're on laptop then these values come from pickle
-    s = 1
-    C = 8
-    m = 9
-    mu = 5
-    prior = np.array([[0.5, 0.5]])
-    X_array = np.array([[0, 1]])
-    T = 1
-    N = 1024
-    time_of_conditioning = 0.9
-    index = int(N * time_of_conditioning) #index with respect to which we condition
-    which_X =  0 #tells us which value of X_array is the true one
-    tau = np.array([[0.1, 0.2, 0.1, 0.3]]) #here we set waiting times (could be made random)
-    Ngrid = 1024#resolution along time axis of prediction curves
-    Nruns = 1000
-    Nprediction_pics = 1
-    Nfake_rand = 15 #when tau random, how many fake news arrival random variables do we model?
+if location == 'cloud' or location == 'single location' or location == '': #if we're on laptop then these values come from the pickled file
+    s = 1 #information flow rate
+    C = 8 #magnitude of fake news
+    m = 9 #decay rate of fake news
+    mu = 5 #rate parameter of the exponential distribution for waiting times
+    prior = np.array([[0.5, 0.5]]) #prior probabilities
+    X_array = np.array([[0, 1]]) #the true underlying random variable we attempt to detect
+    T = 1 #final time
+    N = 1024 #number of steps on the time axis when discretizing the information process
+    time_of_conditioning = 0.9 #time at which we make the prediction, in the cases where this is fixed (in case of taugen being 'random' or 'deterministic', not 'predcurve')
+    index = int(N * time_of_conditioning) #index on the time array with respect to which we condition
+    which_X =  0 #tells us which value of X_array is the true one; that is, true value is X_array[0, which_X]
+    tau = np.array([[0.1, 0.2, 0.1, 0.3]]) #array of waiting times (interarrival times) if these are fixed (in case of taugen being 'deterministic' or 'predcurve', ot 'random')
+    Ngrid = 1024 #number of steps discretizing time for the prediction curves (in case taugen is 'predcurve'); that is, resolution of predcurves (Ngrid predictions are required)
+    Nruns = 1000 #number of runs in case taugen is 'deterministic' or 'random'
+    Nprediction_pics = 1 #number of pictures of prediction curves the algorithm produces
+    Nfake_rand = 15 #when taugen is 'random', this determines how many fake news (inter)arrival times we model
+    #Ideally, this number is large enough so that probability of >Nfake_rand items of fake news arriving before time T is small
 
-    t_array = gen_t_array(T, N)
+    t_array = gen_t_array(T, N) #generate t_array
 
 if location != 'laptop': #otherwise tau will be set by pickle file  
-    MC_measure = integration_upper_bound**tau.shape[1] #for MC integrations, global variable  
+    MC_measure = integration_upper_bound**tau.shape[1] #for MC integrations, global variable (Giving the measure of area over which integration is carried out)
     if taugen == 'deterministic' or taugen == 'predcurve':
         noises = tau.shape[1] #Number of noises; if N>1 always assume/generate exponential dist. 
     elif taugen == 'random':
@@ -1084,7 +1117,7 @@ if location != 'laptop': #otherwise tau will be set by pickle file
 #info_path = info(s, X_array[0, which_X], t_array, BM_path, tau, C, m)
 #plot_info(info_path, t_array, C, m, tau)
 
-if location == 'cloud' or location == 'single location':
+if location == 'cloud' or location == 'single location': #beginning of computations
 
     """If we want prediction curves"""
     if taugen == 'predcurve':
@@ -1107,13 +1140,17 @@ if location == 'cloud' or location == 'single location':
         A = (t_array, s, C, m, mu, prior, X_array, T, N, index, which_X, Nfake_rand)
         result = Par_compare_models_tau_random(Nruns, A)
     
+    """Pickle the result"""
+    
     output = open('result.pkl', 'wb')
     pars = (t_array, s, C, m, mu, prior, X_array, T, N, time_of_conditioning, which_X, tau, Ngrid, Nprediction_pics)
     pickle.dump((result, pars), output) #also pickle all parameters
     output.close()
 
-if location == 'laptop' or location == 'single location':
-
+if location == 'laptop' or location == 'single location': #plotting begins
+    
+    """Unpickle the result"""
+    
     pkl_file = open('result.pkl', 'rb')
     (result, pars) = pickle.load(pkl_file)
     pkl_file.close()
@@ -1144,8 +1181,6 @@ if location == 'laptop' or location == 'single location':
 
 #for i in range(5):
 #    prediction_curves(Ngrid, t_array, s, C, m, mu, prior, X_array, T, N, which_X, tau)  
-
-
 
 endvar = time.time()
 print(endvar-start)

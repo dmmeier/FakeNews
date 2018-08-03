@@ -21,6 +21,7 @@ import matplotlib.pyplot as plt
 import time
 
 from scipy import integrate as integrate
+from scipy.stats import beta
 
 from joblib import Parallel, delayed
 
@@ -345,7 +346,7 @@ def cond_exp(info, t_array, s, X_array, C, m, prior, mu, index):
     result, error = integrate.quad(integrand, 0, 50, limit = 100, args = (info, t_array, s, X_array, C, m, prior, mu, index))
     return result
 
-def cond_exp_own(info, t_array, s, X_array, C, m, prior, mu, index):
+def cond_exp_own(info, t_array, s, X_array, C, m, prior, mu, index, int_samples_in = 0):
     if noises == 1 and integr == 'Riemann':
         #normalization factor
         factor, rel, part = tau_normalization_own(info, t_array, s, X_array, C, m, prior, mu, index)
@@ -384,7 +385,10 @@ def cond_exp_own(info, t_array, s, X_array, C, m, prior, mu, index):
                 print(k)
             summation = 0
             sum_tau_norm = 0
-            int_samples = integration_upper_bound * np.random.rand(MC_integration_inner_steps, noises)
+            if int_samples_in == 0: #then generate own integration samples
+                int_samples = integration_upper_bound * np.random.rand(MC_integration_inner_steps, noises)
+            else: #int_samples have been passed in as a list of arrays, list index the outer counter
+                int_samples = int_samples_in[k]
             #print("This is sample {}".format(int_samples[0, :]))
             values, taup_vals = integrand(int_samples, info, t_array, s, X_array, C, m, prior, mu, index)
             summation = 1/MC_integration_inner_steps * np.sum(values, axis = 0)
@@ -453,8 +457,8 @@ def plot_fake_news(t_array, tau, C, m):
     plt.title('Fake news')
     plt.show()
 
-def get_best_estimate(info_path, t_array, s, C, m, mu, prior, X_array, T, N, index, which_X, tau):
-    best_estimate, relerror, parterror = cond_exp_own(info_path, t_array, s, X_array, C, m, prior, mu, index)
+def get_best_estimate(info_path, t_array, s, C, m, mu, prior, X_array, T, N, index, which_X, tau, int_samples = 0): #can pass in int_samples in case want to fix MC integration variables
+    best_estimate, relerror, parterror = cond_exp_own(info_path, t_array, s, X_array, C, m, prior, mu, index, int_samples)
     return best_estimate , relerror, parterror
 
 def get_best_estimate_ignorant(info_path, t_array, s, m, mu, prior, X_array, T, N, index, which_X, tau):
@@ -1021,7 +1025,238 @@ def Par_compare_models_plotting_tau_deterministic(t_array, s, C, m, mu, prior, X
     plt.hist(gains_ignorant[gains<0], bins = 20)
     plt.title('Percentage gain of ignorant in {} cases'.format(np.sum(gains<0)))
     plt.show()
+
+def pred_curves_var_prior(t_array, s, C, m, mu, X_array, T, N, which_X, tau): #prediction curves for various priors
+    #only works for binary choices of X_array
     
+    #generate the one and only info_path
+    BM_path = BM(t_array)
+    info_path = info(s, X_array[0, which_X], t_array, BM_path, tau, C, m)
+    plot_info(info_path, t_array, C, m, tau)
+    
+    curve_list = []
+    
+    priorgrid = np.linspace(0, 1, Nmacroscopic)
+    #approximate priors in middle of these intervals
+    for i in range(len(priorgrid)-1):
+        print("Dealing with prior {}".format(i))
+        p = 0.5 * (priorgrid[i+1] - priorgrid[i]) #probability of X_array[0, 0]
+        prior = np.array([[p, 1-p]])
+        #generate prediction curves
+        A = (t_array, s, C, m, mu, prior, X_array, T, N, which_X, tau)
+        predictions, info_path = Par_prediction_curves_var_prior(Ngrid, A, info_path) 
+        single_curve = predictions
+        curve_list.append(single_curve)
+    return curve_list
+        
+def Par_prediction_curves_var_prior(Ngrid, A, info_path): #A a tuple of the form
+    #(t_array, s, C, m, mu, prior, X_array, T, N, which_X, tau) = A
+    (t_array, s, C, m, mu, prior, X_array, T, N, which_X, tau) = A
+    #BM_path = BM(t_array)
+    #info_path = info(s, X_array[0, which_X], t_array, BM_path, tau, C, m)
+    conditioning_grid = np.linspace(1/Ngrid, 1, Ngrid)
+    B = (info_path, A)
+    
+    #debug
+    #K = Par_prediction_helper(conditioning_grid[0], B)
+    #debug 
+    
+    list_t = [B for i in conditioning_grid]
+    
+    results = Parallel(n_jobs=-1)(delayed(Par_prediction_helper)(i,t) for i,t in zip(conditioning_grid,list_t))  
+    return results, info_path
+        
+def Macro_plotting(data, beta_a, beta_b, ignorant_weight, model2_weight, true_weight):
+    ignorant_dict = {}
+    model2_dict = {}
+    true_dict = {}
+    for k in range(len(data)): #k number of curves
+        ignorant = []
+        model2 = []
+        true = []
+        curve = data[k]
+        for j in range(len(curve)):
+            current = curve[j]
+            model2v = current[0]
+            ignorantv = current[1]
+            truev = current[2]
+            model2.append(model2v)
+            ignorant.append(ignorantv)
+            true.append(truev)
+        ignorant_dict["ignorant{}".format(k)] = np.array(ignorant)
+        model2_dict["model2{}".format(k)] = np.array(model2)
+        true_dict["true{}".format(k)] = np.array(true)
+        #element k in dictionary is an array representing the k-th curve
+    
+    #now we average according to the beta distribution, and the type I/II/III distribution
+    priorgrid = np.linspace(0, 1, Nmacroscopic)
+    beta_cdf_vals = beta.cdf(priorgrid, Beta_a, Beta_b)
+    beta_weights = []
+
+    for i in range(len(priorgrid) - 1): #number of intervals that must assign beta weights to
+        beta_weight = beta_cdf_vals[i+1] - beta_cdf_vals[i]
+        beta_weights.append(beta_weight)
+    
+    #averaging curves
+    average = 0
+    for k in range(len(data)):
+        average = average + beta_weights[k] * (Ignorant_weight * ignorant_dict["ignorant{}".format(k)]
+                    + Model2_weight * model2_dict["model2{}".format(k)]
+                    + True_weight * true_dict["true{}".format(k)])
+        
+    plt.plot(average)
+    plt.show()
+   
+def zero_approx(funepshalfplus, funepshalfminus, funa, epsilon):
+    f_dash =1/epsilon * (funepshalfplus - funepshalfminus)
+    delta = (0.5-funa)/f_dash #want f to be fifty percent
+    return delta #root approximation increment
+
+def probarray(x):
+    return np.array([[x, 1-x]])
+
+def Par_fifty(pgs, A): #pgs priorgrids; A tuple of the form A = (info_path, t_array, s, C, m, mu, X_array, T, N, which_X, tau, int_samples)
+    B = (pgs, A)
+    
+    
+    list_i = range(3)
+    list_t = [B for i in list_i]
+    
+    results = Parallel(n_jobs=-1)(delayed(Par_fifty_helper)(i,t) for i,t in zip(list_i,list_t))  
+    return results
+
+def Par_fifty_helper(i, B):
+    (pgs, A) = B
+    (info_path, t_array, s, C, m, mu, X_array, T, N, index, which_X, tau, int_samples) = A
+    pg_ig = pgs[0]
+    pg_m2 = pgs[1]
+    pg_t = pgs[2]
+    
+    prior_ig = probarray(pg_ig[i])
+    prior_m2 = probarray(pg_m2[i])
+    prior_t = probarray(pg_t[i])
+    
+    print(prior_ig)
+    mod2, _, _ = get_best_estimate(info_path, t_array, s, C, m, mu, prior_m2, X_array, T, N, index, which_X, tau, int_samples)
+    igno = true_model_direct(info_path, t_array, s, 0, m, mu, prior_ig, X_array, T, N, index, which_X, tau)
+    true = true_model_direct(info_path, t_array, s, C, m, mu, prior_t, X_array, T, N, index, which_X, tau)
+    
+    return (mod2, igno, true)
+    
+def fifty_percent_line(info_path, t_array, s, C, m, mu, X_array, T, N, index, which_X, tau):
+    conditioning_grid = np.linspace(1/Ngrid, 1, Ngrid)
+    #prior probabilities that make two options equivalent along conditioning_grid
+    #at time zero, this is p = 0.5 for all versions
+    fifty_ignorant = [0.5]
+    fifty_model2 = [0.5]
+    fifty_true = [0.5]
+    
+    fifty_values_ignorant = []
+    fifty_values_model2 = []
+    fifty_values_true = []
+    
+    #need MC integration variables to be the same, otherwise get spurious noise in derivatives
+    int_samples = []
+    for k in range(MC_integration_outer_steps):
+        int_samples_inner = integration_upper_bound * np.random.rand(MC_integration_inner_steps, noises)
+        int_samples.append(int_samples_inner)
+    
+    for k in range(len(conditioning_grid)):
+        index = int(N*conditioning_grid[k])
+        #previous fifty_percent prior
+        prior_prev_ig =probarray(fifty_ignorant[k])
+        prior_prev_m2 = probarray(fifty_model2[k])
+        prior_prev_t = probarray(fifty_true[k])
+        
+#        #take previous prior as the starting point; construct searchgrid
+#        prior_searchgrid_ignorant = np.linspace(fifty_ignorant[k]-step_root, fifty_ignorant[k]+step_root, par_root)
+#        prior_searchgrid_model2 = np.linspace(fifty_model2[k]-step_root, fifty_model2[k]+step_root, par_root)
+#        prior_searchgrid_true = np.linspace(fifty_true[k]-step_root, fifty_true[k]+step_root, par_root)
+#        pgs = [prior_searchgrid_ignorant, prior_searchgrid_model2, prior_searchgrid_true]
+        
+        if parallel_root_finding == 0:
+            prior_searchgrid_ignorant = [fifty_ignorant[k]-epsilon_root/2, fifty_ignorant[k],  fifty_ignorant[k]+epsilon_root/2]
+            prior_searchgrid_model2 = [fifty_model2[k]-epsilon_root/2, fifty_model2[k],  fifty_model2[k]+epsilon_root/2]
+            prior_searchgrid_true = [fifty_true[k]-epsilon_root/2, fifty_true[k] , fifty_true[k]+epsilon_root/2]
+            pgs = [prior_searchgrid_ignorant, prior_searchgrid_model2, prior_searchgrid_true]
+#        
+            #go into parallelized routines
+            A = (info_path, t_array, s, C, m, mu, X_array, T, N, index, which_X, tau, int_samples)
+            results = Par_fifty(pgs, A)
+            
+            (model2epshalfminus, ignorantepshalfminus, trueepshalfminus) = results[0]
+            (model2_prev, ignorant_prev, true_prev) = results[1]
+            (model2epshalfplus, ignorantepshalfplus, trueepshalfplus) = results[2]
+        
+        
+#        model2_prev, _, _ = get_best_estimate(info_path, t_array, s, C, m, mu, prior_prev_m2, X_array, T, N, index, which_X, tau, int_samples)
+#        ignorant_prev = true_model_direct(info_path, t_array, s, 0, m, mu, prior_prev_ig, X_array, T, N, index, which_X, tau)
+#        true_prev = true_model_direct(info_path, t_array, s, C, m, mu, prior_prev_t, X_array, T, N, index, which_X, tau)
+#        
+#        model2epshalfplus, _, _ = get_best_estimate(info_path, t_array, s, C, m, mu, probarray(fifty_model2[k] + epsilon_root/2), X_array, T, N, index, which_X, tau, int_samples)
+#        model2epshalfminus, _, _ = get_best_estimate(info_path, t_array, s, C, m, mu, probarray(fifty_model2[k] - epsilon_root/2), X_array, T, N, index, which_X, tau, int_samples)
+#        #ignorant, _, _ = get_best_estimate_ignorant(info_path, t_array, s, m, mu, prior, X_array, T, N, index, which_X, tau)
+#        ignorantepshalfplus = true_model_direct(info_path, t_array, s, 0, m, mu, probarray(fifty_ignorant[k] + epsilon_root/2), X_array, T, N, index, which_X, tau)
+#        ignorantepshalfminus = true_model_direct(info_path, t_array, s, 0, m, mu, probarray(fifty_ignorant[k] - epsilon_root/2), X_array, T, N, index, which_X, tau)
+#        #true, _, _ = get_true_best_estimate(info_path, t_array, s, C, m, mu, prior, X_array, T, N, index, which_X, tau)
+#        trueepshalfplus = true_model_direct(info_path, t_array, s, C, m, mu, probarray(fifty_true[k] + epsilon_root/2), X_array, T, N, index, which_X, tau)
+#        trueepshalfminus = true_model_direct(info_path, t_array, s, C, m, mu, probarray(fifty_true[k] - epsilon_root/2), X_array, T, N, index, which_X, tau)
+        
+            delta_model2 = zero_approx(model2epshalfplus, model2epshalfminus, model2_prev, epsilon_root)
+            delta_ignorant = zero_approx(ignorantepshalfplus, ignorantepshalfminus, ignorant_prev, epsilon_root)
+            delta_true = zero_approx(trueepshalfplus, trueepshalfminus, true_prev, epsilon_root)
+            
+            ignorant_prior = fifty_ignorant[k] + delta_ignorant
+            model2_prior = fifty_model2[k] + delta_model2
+            true_prior = fifty_true[k] + delta_true
+            
+        fifty_ignorant.append(ignorant_prior)
+        fifty_model2.append(model2_prior)
+        fifty_true.append(true_prior)
+        
+        #checking
+        model2_current, _, _ = get_best_estimate(info_path, t_array, s, C, m, mu, probarray(model2_prior), X_array, T, N, index, which_X, tau, int_samples)
+        ignorant_current = true_model_direct(info_path, t_array, s, 0, m, mu, probarray(ignorant_prior), X_array, T, N, index, which_X, tau)
+        true_current = true_model_direct(info_path, t_array, s, C, m, mu, probarray(true_prior), X_array, T, N, index, which_X, tau)
+        
+        #these should be close to 0.5
+        fifty_values_ignorant.append(ignorant_current)
+        fifty_values_model2.append(model2_current)
+        fifty_values_true.append(true_current)
+        
+    plt.plot(fifty_ignorant, label = 'ignorant')
+    plt.plot(fifty_model2, label = 'model2')
+    plt.plot(fifty_true, label = 'true')
+    plt.title('Fifty percent division lines on space of priors')
+    plt.legend()
+    plt.show()
+    
+    plt.plot(fifty_values_ignorant, label = 'ignorant')
+    plt.plot(fifty_values_model2, label = 'model2')
+    plt.plot(fifty_values_true, label = 'true')
+    plt.title('Evaluations on the fifty percent lines; should be close to 0.5')
+    plt.legend()
+    plt.show()
+    
+    return (fifty_ignorant, fifty_model2, fifty_true)
+    
+def poll_plotting(fifty_ignorant, fifty_model2, fifty_true, beta_a, beta_b): #lists
+    #plotting the proportion of population corresponding to the fifty percent lines in space of priors
+    ignorant_prop = beta.cdf(fifty_ignorant, beta_a, beta_b)
+    model2_prop = beta.cdf(fifty_model2, beta_a, beta_b)
+    true_prop = beta.cdf(fifty_true, beta_a, beta_b)
+    
+    plt.plot(ignorant_prop, label = 'ignorant')
+    plt.plot(model2_prop, label = 'model2')
+    plt.plot(true_prop, label = 'true')
+    plt.legend()
+    plt.title('Proportion of population supporting candidate 1')
+    plt.show()
+    
+    
+    
+        
+        
 
 """
 Main program begins here. 
@@ -1056,19 +1291,21 @@ density = 'exponential' #'exponential' or 'uniform' -- true and assumed distribu
 
 verbose = 0 #some comments are added 
 
-taugen ='random' #'deterministic' or 'random' or 'predcurve'
+taugen ='fifty' #'deterministic' or 'random' or 'predcurve' or 'macro' or 'fifty'
 #if 'random' we generate the waiting times tau randomly as well as the information process.
 #if 'deterministic' we give the waiting times explicitly below as variable tau while randomly varying information process on each iteration.
 #if 'predcurve' we generate prediction curves (conditioning time is being varied for the same information process).
+#if 'macro' then we get aggregation of curves based on beta distributed priors present in the population
+#if 'fifty' we plot the proportion supporting candidate 1 over time, based on a beta population distribution on space of priors
 
-location = 'cloud' #'laptop' or 'cloud' or 'single location'
+location = 'single location' #'laptop' or 'cloud' or 'single location'
 #'single location' if one machine is used for computations and plotting
 #'cloud' if the machine does the computation and then pickles the result
 #'laptop' if the machine does the unpickling and plotting
 
 
 integration_upper_bound = 1  #for own integration routines with noises = 1 as well as MC bounds for uniform distribution from which we draw integration variable samples
-MC_integration_outer_steps = 1000 #number of MC steps we do using a for loop
+MC_integration_outer_steps = 500 #number of MC steps we do using a for loop
 MC_integration_inner_steps = 200 #number of (length of tau)-dimensional integration variables we use in MC in vectorized computation (function values computed all at once)
 #Total number of MC simulations is the product MC_integration_outer_steps * MC_integration_inner_steps
 
@@ -1077,6 +1314,12 @@ integr = 'MC' #'Riemann' (only for noises = 1) or 'MC'
 #If MC then we can have multiple sources of fake news; integrations are done using MC simulation
 
 MCgraphs = 0 #showing or not graphs of MC simulations; shows how the relevant values converge
+
+epsilon_root = 1e-06 #for root finding of the fifty percent line
+par_root = 32 #number of root finding points we compute at each step
+step_root = 0.05 #total step either side of previous prior that we take'
+parallel_root_finding = 0 #if 1, then do par_root search steps parallelized; otherwise approximate derivative using only 3 searches
+
 
 """
 Parameters and initializations
@@ -1097,17 +1340,28 @@ if location == 'cloud' or location == 'single location' or location == '': #if w
     index = int(N * time_of_conditioning) #index on the time array with respect to which we condition
     which_X =  0 #tells us which value of X_array is the true one; that is, true value is X_array[0, which_X]
     tau = np.array([[0.1, 0.2, 0.1, 0.3]]) #array of waiting times (interarrival times) if these are fixed (in case of taugen being 'deterministic' or 'predcurve', ot 'random')
-    Ngrid = 1024 #number of steps discretizing time for the prediction curves (in case taugen is 'predcurve'); that is, resolution of predcurves (Ngrid predictions are required)
+    Ngrid = 1024 #number of steps discretizing time for the prediction curves (in case taugen is 'predcurve' or 'macro' or 'fifty'); that is, resolution of predcurves (Ngrid predictions are required)
     Nruns = 1000 #number of runs in case taugen is 'deterministic' or 'random'
     Nprediction_pics = 1 #number of pictures of prediction curves the algorithm produces
     Nfake_rand = 15 #when taugen is 'random', this determines how many fake news (inter)arrival times we model
     #Ideally, this number is large enough so that probability of >Nfake_rand items of fake news arriving before time T is small
-
+    
+    Nmacroscopic = 20 #for aggregation, how many grid points we approximate beta distribution with
+    #(a, b) of the beta distribution in aggregation
+    Beta_a = 0.5
+    Beta_b = 0.5 
+    #weights of type I/II/III must add up to 1; relative weights of ignorant, model2, true in population
+    Ignorant_weight = 0.2
+    Model2_weight = 0.4
+    True_weight = 1 - Ignorant_weight - Model2_weight #must add up to 1; 
+    assert(True_weight >= 0)
+    
     t_array = gen_t_array(T, N) #generate t_array
+
 
 if location != 'laptop': #otherwise tau will be set by pickle file  
     MC_measure = integration_upper_bound**tau.shape[1] #for MC integrations, global variable (Giving the measure of area over which integration is carried out)
-    if taugen == 'deterministic' or taugen == 'predcurve':
+    if taugen == 'deterministic' or taugen == 'predcurve' or taugen == 'macro' or taugen == 'fifty':
         noises = tau.shape[1] #Number of noises; if N>1 always assume/generate exponential dist. 
     elif taugen == 'random':
         noises = Nfake_rand
@@ -1139,6 +1393,17 @@ if location == 'cloud' or location == 'single location': #beginning of computati
     if taugen == 'random':
         A = (t_array, s, C, m, mu, prior, X_array, T, N, index, which_X, Nfake_rand)
         result = Par_compare_models_tau_random(Nruns, A)
+        
+    """If we want aggregation curves"""
+    if taugen == 'macro': 
+        result = pred_curves_var_prior(t_array, s, C, m, mu, X_array, T, N, which_X, tau)
+        
+    """If we want polling curves"""
+    if taugen == 'fifty':
+        BM_path = BM(t_array)
+        info_path = info(s, X_array[0, which_X], t_array, BM_path, tau, C, m)
+        plot_info(info_path, t_array, C, m, tau)
+        result = fifty_percent_line(info_path, t_array, s, C, m, mu, X_array, T, N, index, which_X, tau)
     
     """Pickle the result"""
     
@@ -1171,6 +1436,14 @@ if location == 'laptop' or location == 'single location': #plotting begins
             single_result = result[k]
             Par_prediction_plotting(t_array, s, C, m, mu, prior, X_array, T, N, time_of_conditioning, which_X, tau, Ngrid, single_result)
         
+    """If average of prediction curves over range of priors needed"""
+    if taugen == 'macro':
+        Macro_plotting(result, Beta_a, Beta_b, Ignorant_weight, Model2_weight, True_weight)
+        
+    """If want plots of poll curves"""
+    if taugen == 'fifty':
+        (fifty_ignorant, fifty_model2, fifty_true) = result
+        poll_plotting(fifty_ignorant, fifty_model2, fifty_true, Beta_a, Beta_b)
 
 
 #single_simulation(t_array, s, C, m, mu, prior, X_array, T, N, index, which_X, tau)

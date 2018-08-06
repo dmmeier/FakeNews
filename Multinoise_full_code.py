@@ -1119,7 +1119,7 @@ def Par_fifty(pgs, A): #pgs priorgrids; A tuple of the form A = (info_path, t_ar
     B = (pgs, A)
     
     
-    list_i = range(3)
+    list_i = range(len(pgs[0]))
     list_t = [B for i in list_i]
     
     results = Parallel(n_jobs=-1)(delayed(Par_fifty_helper)(i,t) for i,t in zip(list_i,list_t))  
@@ -1162,6 +1162,7 @@ def fifty_percent_line(info_path, t_array, s, C, m, mu, X_array, T, N, index, wh
         int_samples.append(int_samples_inner)
     
     for k in range(len(conditioning_grid)):
+        print("Gridpoint {}".format(k))
         index = int(N*conditioning_grid[k])
         #previous fifty_percent prior
         prior_prev_ig =probarray(fifty_ignorant[k])
@@ -1174,19 +1175,18 @@ def fifty_percent_line(info_path, t_array, s, C, m, mu, X_array, T, N, index, wh
 #        prior_searchgrid_true = np.linspace(fifty_true[k]-step_root, fifty_true[k]+step_root, par_root)
 #        pgs = [prior_searchgrid_ignorant, prior_searchgrid_model2, prior_searchgrid_true]
         
-        if parallel_root_finding == 0:
-            prior_searchgrid_ignorant = [fifty_ignorant[k]-epsilon_root/2, fifty_ignorant[k],  fifty_ignorant[k]+epsilon_root/2]
-            prior_searchgrid_model2 = [fifty_model2[k]-epsilon_root/2, fifty_model2[k],  fifty_model2[k]+epsilon_root/2]
-            prior_searchgrid_true = [fifty_true[k]-epsilon_root/2, fifty_true[k] , fifty_true[k]+epsilon_root/2]
-            pgs = [prior_searchgrid_ignorant, prior_searchgrid_model2, prior_searchgrid_true]
+        prior_searchgrid_ignorant = [fifty_ignorant[k]-epsilon_root/2, fifty_ignorant[k],  fifty_ignorant[k]+epsilon_root/2]
+        prior_searchgrid_model2 = [fifty_model2[k]-epsilon_root/2, fifty_model2[k],  fifty_model2[k]+epsilon_root/2]
+        prior_searchgrid_true = [fifty_true[k]-epsilon_root/2, fifty_true[k] , fifty_true[k]+epsilon_root/2]
+        pgs = [prior_searchgrid_ignorant, prior_searchgrid_model2, prior_searchgrid_true]
 #        
-            #go into parallelized routines
-            A = (info_path, t_array, s, C, m, mu, X_array, T, N, index, which_X, tau, int_samples)
-            results = Par_fifty(pgs, A)
-            
-            (model2epshalfminus, ignorantepshalfminus, trueepshalfminus) = results[0]
-            (model2_prev, ignorant_prev, true_prev) = results[1]
-            (model2epshalfplus, ignorantepshalfplus, trueepshalfplus) = results[2]
+        #go into parallelized routines
+        A = (info_path, t_array, s, C, m, mu, X_array, T, N, index, which_X, tau, int_samples)
+        results = Par_fifty(pgs, A)
+        
+        (model2epshalfminus, ignorantepshalfminus, trueepshalfminus) = results[0]
+        (model2_prev, ignorant_prev, true_prev) = results[1]
+        (model2epshalfplus, ignorantepshalfplus, trueepshalfplus) = results[2]
         
         
 #        model2_prev, _, _ = get_best_estimate(info_path, t_array, s, C, m, mu, prior_prev_m2, X_array, T, N, index, which_X, tau, int_samples)
@@ -1202,22 +1202,84 @@ def fifty_percent_line(info_path, t_array, s, C, m, mu, X_array, T, N, index, wh
 #        trueepshalfplus = true_model_direct(info_path, t_array, s, C, m, mu, probarray(fifty_true[k] + epsilon_root/2), X_array, T, N, index, which_X, tau)
 #        trueepshalfminus = true_model_direct(info_path, t_array, s, C, m, mu, probarray(fifty_true[k] - epsilon_root/2), X_array, T, N, index, which_X, tau)
         
-            delta_model2 = zero_approx(model2epshalfplus, model2epshalfminus, model2_prev, epsilon_root)
-            delta_ignorant = zero_approx(ignorantepshalfplus, ignorantepshalfminus, ignorant_prev, epsilon_root)
-            delta_true = zero_approx(trueepshalfplus, trueepshalfminus, true_prev, epsilon_root)
-            
-            ignorant_prior = fifty_ignorant[k] + delta_ignorant
-            model2_prior = fifty_model2[k] + delta_model2
-            true_prior = fifty_true[k] + delta_true
-            
-        fifty_ignorant.append(ignorant_prior)
-        fifty_model2.append(model2_prior)
-        fifty_true.append(true_prior)
+        delta_model2 = zero_approx(model2epshalfplus, model2epshalfminus, model2_prev, epsilon_root)
+        delta_ignorant = zero_approx(ignorantepshalfplus, ignorantepshalfminus, ignorant_prev, epsilon_root)
+        delta_true = zero_approx(trueepshalfplus, trueepshalfminus, true_prev, epsilon_root)
+        
+        ignorant_prior = fifty_ignorant[k] + delta_ignorant
+        model2_prior = fifty_model2[k] + delta_model2
+        true_prior = fifty_true[k] + delta_true
         
         #checking
         model2_current, _, _ = get_best_estimate(info_path, t_array, s, C, m, mu, probarray(model2_prior), X_array, T, N, index, which_X, tau, int_samples)
         ignorant_current = true_model_direct(info_path, t_array, s, 0, m, mu, probarray(ignorant_prior), X_array, T, N, index, which_X, tau)
         true_current = true_model_direct(info_path, t_array, s, C, m, mu, probarray(true_prior), X_array, T, N, index, which_X, tau)
+            
+        #Here we can build a high-precision root finder that searches an interval around the new suggested priors
+        #to get closer to the root. The interval ideally would be a difference of old prior - new prior, both sides
+        #to the old prior. 
+            
+        if high_precision_root_finding == 1:
+            
+            fine_grid_igno = np.linspace(ignorant_prior - frac*np.abs(delta_ignorant), ignorant_prior + frac*np.abs(delta_ignorant), par_root)
+            fine_grid_m2 = np.linspace(model2_prior - frac*np.abs(delta_model2), model2_prior + frac*np.abs(delta_model2), par_root)
+            fine_grid_true = np.linspace(true_prior - frac*np.abs(delta_true), true_prior + frac*np.abs(delta_true), par_root)
+            
+            pgs_fine = [fine_grid_igno, fine_grid_m2, fine_grid_true]
+            
+            #go into parallelized routines
+            A = (info_path, t_array, s, C, m, mu, X_array, T, N, index, which_X, tau, int_samples)
+            results = Par_fifty(pgs_fine, A)
+            
+            res_igno = []
+            res_m2 = []
+            res_true = []
+            
+            #unpack results
+            for indx in range(len(results)):
+                current = results[indx]
+                res_m2.append(current[0])
+                res_igno.append(current[1])
+                res_true.append(current[2])
+                
+            (optindx_igno, decider_igno, weight_igno) = opt_index(res_igno)
+            (optindx_m2, decider_m2, weight_m2) = opt_index(res_m2)
+            (optindx_true, decider_true, weight_true) = opt_index(res_true)
+#            
+            if decider_igno == 0:
+                ignorant_prior_tentative = fine_grid_igno[optindx_igno]
+            elif decider_igno == 1:
+                ignorant_prior_tentative = (1-weight_igno) * fine_grid_igno[optindx_igno] + weight_igno * fine_grid_igno[optindx_igno-1]
+#            
+            if decider_m2 == 0:
+                model2_prior_tentative = fine_grid_m2[optindx_m2]
+            elif decider_m2 == 1:
+                model2_prior_tentative = (1-weight_m2) * fine_grid_m2[optindx_m2] + weight_m2 * fine_grid_m2[optindx_m2-1]
+#            
+            if decider_true == 0:
+                true_prior_tentative = fine_grid_true[optindx_true]
+            elif decider_true == 1:
+                true_prior_tentative = (1-weight_true) * fine_grid_true[optindx_true] +  weight_true * fine_grid_true[optindx_true-1]
+                
+            #now need to check that these priors are better than the ones we had before
+            #checking
+            m2_result, _, _ = get_best_estimate(info_path, t_array, s, C, m, mu, probarray(model2_prior_tentative), X_array, T, N, index, which_X, tau, int_samples)
+            igno_result = true_model_direct(info_path, t_array, s, 0, m, mu, probarray(ignorant_prior_tentative), X_array, T, N, index, which_X, tau)
+            true_result = true_model_direct(info_path, t_array, s, C, m, mu, probarray(true_prior_tentative), X_array, T, N, index, which_X, tau)
+            
+            if np.abs(igno_result - 0.5) < np.abs(ignorant_current - 0.5):
+                ignorant_prior = ignorant_prior_tentative
+                ignorant_current = igno_result
+            if np.abs(m2_result - 0.5) < np.abs(model2_current - 0.5):
+                model2_prior = model2_prior_tentative
+                model2_current = m2_result
+            if np.abs(true_result - 0.5) < np.abs(true_current - 0.5):
+                true_prior = true_prior_tentative
+                true_current = true_result
+#                
+        fifty_ignorant.append(ignorant_prior)
+        fifty_model2.append(model2_prior)
+        fifty_true.append(true_prior)
         
         #these should be close to 0.5
         fifty_values_ignorant.append(ignorant_current)
@@ -1234,17 +1296,42 @@ def fifty_percent_line(info_path, t_array, s, C, m, mu, X_array, T, N, index, wh
     plt.plot(fifty_values_ignorant, label = 'ignorant')
     plt.plot(fifty_values_model2, label = 'model2')
     plt.plot(fifty_values_true, label = 'true')
-    plt.title('Evaluations on the fifty percent lines; should be close to 0.5')
+    plt.title('Evals; should be close to 0.5')
     plt.legend()
     plt.show()
     
-    return (fifty_ignorant, fifty_model2, fifty_true)
+    return (fifty_ignorant, fifty_model2, fifty_true, fifty_values_ignorant, fifty_values_model2, fifty_values_true, info_path)
+
+def opt_index(res): #res a list of values
+    ar = np.array(res)
+    diff = ar - 0.5
+    absdiff = np.abs(diff)
+    optindx = np.argmin(absdiff)
+    if optindx == 0 or optindx == len(res)-1:
+        print("Optimum at end of range")
+        weight = 1
+        return (optindx, 0, weight) #0 for end of range
+    else:
+        if np.sign(diff[optindx]) != np.sign(diff[optindx + 1]):
+            #weight of optindx point (of lower point)
+            weight = 1 - np.abs(res[optindx]-0.5)/np.abs(res[optindx+1]-res[optindx])
+            return (optindx + 1, 1, weight) #1 for not end of range; returns upper index
+        elif np.sign(diff[optindx - 1]) != np.sign(diff[optindx]):
+            #weight of optindx-1 point
+            weight = 1 - np.abs(res[optindx-1]-0.5)/np.abs(res[optindx-1]-res[optindx])
+            return (optindx, 1, weight)
+        else:
+            print("Something strange is happening here!")
     
-def poll_plotting(fifty_ignorant, fifty_model2, fifty_true, beta_a, beta_b): #lists
+def poll_plotting(fifty_ignorant, fifty_model2, fifty_true, fifty_values_ignorant, fifty_vales_model2, fifty_values_true, beta_a, beta_b): #lists
     #plotting the proportion of population corresponding to the fifty percent lines in space of priors
     ignorant_prop = beta.cdf(fifty_ignorant, beta_a, beta_b)
     model2_prop = beta.cdf(fifty_model2, beta_a, beta_b)
     true_prop = beta.cdf(fifty_true, beta_a, beta_b)
+    
+    overall_prop = Ignorant_weight * ignorant_prop + Model2_weight * model2_prop + True_weight * true_prop
+    inverse_prop = 1-np.array(overall_prop)
+    
     
     plt.plot(ignorant_prop, label = 'ignorant')
     plt.plot(model2_prop, label = 'model2')
@@ -1253,6 +1340,26 @@ def poll_plotting(fifty_ignorant, fifty_model2, fifty_true, beta_a, beta_b): #li
     plt.title('Proportion of population supporting candidate 1')
     plt.show()
     
+    plt.plot(fifty_ignorant, label = 'ignorant')
+    plt.plot(fifty_model2, label = 'model2')
+    plt.plot(fifty_true, label = 'true')
+    plt.title('Fifty percent division lines on space of priors')
+    plt.legend()
+    plt.show()
+    
+    print(fifty_values_ignorant)
+    plt.plot(fifty_values_ignorant, label = 'ignorant')
+    plt.plot(fifty_values_model2, label = 'model2')
+    plt.plot(fifty_values_true, label = 'true')
+    plt.title('Evals; should be close to 0.5')
+    plt.legend()
+    plt.show()
+    
+    plt.plot(overall_prop, label = 'Candidate 1')
+    plt.plot(inverse_prop, label = 'Candidate 2')
+    plt.title('Overall proportions taking into account type weights')
+    plt.legend()
+    plt.show()
     
     
         
@@ -1305,8 +1412,8 @@ location = 'single location' #'laptop' or 'cloud' or 'single location'
 
 
 integration_upper_bound = 1  #for own integration routines with noises = 1 as well as MC bounds for uniform distribution from which we draw integration variable samples
-MC_integration_outer_steps = 500 #number of MC steps we do using a for loop
-MC_integration_inner_steps = 200 #number of (length of tau)-dimensional integration variables we use in MC in vectorized computation (function values computed all at once)
+MC_integration_outer_steps = 10 #number of MC steps we do using a for loop
+MC_integration_inner_steps = 20 #number of (length of tau)-dimensional integration variables we use in MC in vectorized computation (function values computed all at once)
 #Total number of MC simulations is the product MC_integration_outer_steps * MC_integration_inner_steps
 
 integr = 'MC' #'Riemann' (only for noises = 1) or 'MC'
@@ -1316,11 +1423,17 @@ integr = 'MC' #'Riemann' (only for noises = 1) or 'MC'
 MCgraphs = 0 #showing or not graphs of MC simulations; shows how the relevant values converge
 
 epsilon_root = 1e-06 #for root finding of the fifty percent line
-par_root = 32 #number of root finding points we compute at each step
-step_root = 0.05 #total step either side of previous prior that we take'
-parallel_root_finding = 0 #if 1, then do par_root search steps parallelized; otherwise approximate derivative using only 3 searches
 
 
+par_root = 16 #number of root finding points we compute at each step
+high_precision_root_finding = 1 #if 1, then do par_root search steps parallelized; otherwise approximate derivative using only 3 searches
+frac = 0.5 #Used in high precision root finding (how much of prev_prior - new prior (using approximate method) interval is searched over)
+
+#weights of type I/II/III must add up to 1; relative weights of ignorant, model2, true in population
+Ignorant_weight = 0.6
+Model2_weight = 0.3
+True_weight = 1 - Ignorant_weight - Model2_weight #must add up to 1; 
+assert(True_weight >= 0)
 """
 Parameters and initializations
 """
@@ -1330,7 +1443,7 @@ start = time.time()
 if location == 'cloud' or location == 'single location' or location == '': #if we're on laptop then these values come from the pickled file
     s = 1 #information flow rate
     C = 8 #magnitude of fake news
-    m = 9 #decay rate of fake news
+    m = 8 #decay rate of fake news
     mu = 5 #rate parameter of the exponential distribution for waiting times
     prior = np.array([[0.5, 0.5]]) #prior probabilities
     X_array = np.array([[0, 1]]) #the true underlying random variable we attempt to detect
@@ -1339,8 +1452,8 @@ if location == 'cloud' or location == 'single location' or location == '': #if w
     time_of_conditioning = 0.9 #time at which we make the prediction, in the cases where this is fixed (in case of taugen being 'random' or 'deterministic', not 'predcurve')
     index = int(N * time_of_conditioning) #index on the time array with respect to which we condition
     which_X =  0 #tells us which value of X_array is the true one; that is, true value is X_array[0, which_X]
-    tau = np.array([[0.1, 0.2, 0.1, 0.3]]) #array of waiting times (interarrival times) if these are fixed (in case of taugen being 'deterministic' or 'predcurve', ot 'random')
-    Ngrid = 1024 #number of steps discretizing time for the prediction curves (in case taugen is 'predcurve' or 'macro' or 'fifty'); that is, resolution of predcurves (Ngrid predictions are required)
+    tau = np.array([[0.1, 0.2, 0.2, 0.3]]) #array of waiting times (interarrival times) if these are fixed (in case of taugen being 'deterministic' or 'predcurve', ot 'random')
+    Ngrid = 5 #number of steps discretizing time for the prediction curves (in case taugen is 'predcurve' or 'macro' or 'fifty'); that is, resolution of predcurves (Ngrid predictions are required)
     Nruns = 1000 #number of runs in case taugen is 'deterministic' or 'random'
     Nprediction_pics = 1 #number of pictures of prediction curves the algorithm produces
     Nfake_rand = 15 #when taugen is 'random', this determines how many fake news (inter)arrival times we model
@@ -1350,11 +1463,6 @@ if location == 'cloud' or location == 'single location' or location == '': #if w
     #(a, b) of the beta distribution in aggregation
     Beta_a = 0.5
     Beta_b = 0.5 
-    #weights of type I/II/III must add up to 1; relative weights of ignorant, model2, true in population
-    Ignorant_weight = 0.2
-    Model2_weight = 0.4
-    True_weight = 1 - Ignorant_weight - Model2_weight #must add up to 1; 
-    assert(True_weight >= 0)
     
     t_array = gen_t_array(T, N) #generate t_array
 
@@ -1442,8 +1550,11 @@ if location == 'laptop' or location == 'single location': #plotting begins
         
     """If want plots of poll curves"""
     if taugen == 'fifty':
-        (fifty_ignorant, fifty_model2, fifty_true) = result
-        poll_plotting(fifty_ignorant, fifty_model2, fifty_true, Beta_a, Beta_b)
+        Beta_a = 0.5
+        Beta_b= 0.5
+        (fifty_ignorant, fifty_model2, fifty_true, fifty_values_ignorant, fifty_values_model2, fifty_values_true, info_path) = result
+        plot_info(info_path, t_array, C, m, tau)
+        poll_plotting(fifty_ignorant, fifty_model2, fifty_true, fifty_values_ignorant, fifty_values_model2, fifty_values_true, Beta_a, Beta_b)
 
 
 #single_simulation(t_array, s, C, m, mu, prior, X_array, T, N, index, which_X, tau)
